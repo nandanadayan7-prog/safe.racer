@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Safe Racer – Road Safety Game</title>
+    <style>
+        :root {
+            --primary: #3498db;
+            --danger: #e74c3c;
+            --success: #2ecc71;
+            --warning: #f1c40f;
+            --dark: #1a1a1a;
+            --road: #2c3e50;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
+
+        body {
+            background: #333;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 450px;
+            height: 100vh;
+            background: var(--dark);
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+
+        /* Top HUD */
+        #hud {
+            display: flex;
+            justify-content: space-around;
+            padding: 15px 5px;
+            background: #000;
+            border-bottom: 2px solid #444;
+            font-size: 14px;
+            font-weight: bold;
+            z-index: 5;
+        }
+        .stat-val { color: var(--primary); }
+        .stat-err { color: var(--danger); }
+
+        canvas {
+            flex-grow: 1;
+            width: 100%;
+            background: var(--road);
+        }
+
+        /* Overlays */
+        .screen {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 30px;
+            z-index: 20;
+            backdrop-filter: blur(5px);
+        }
+
+        .hidden { display: none !important; }
+
+        h1 { font-size: 3rem; margin-bottom: 10px; color: var(--success); }
+        p { margin-bottom: 20px; line-height: 1.5; }
+
+        button {
+            padding: 15px 40px;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            background: var(--primary);
+            color: white;
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.95); }
+
+        /* Quiz Specific */
+        .quiz-opt {
+            width: 100%;
+            margin: 8px 0;
+            border-radius: 8px;
+            background: #444;
+            font-size: 16px;
+        }
+
+        /* Mobile Controls */
+        #mobile-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            padding: 20px;
+            background: #111;
+            border-top: 2px solid #333;
+        }
+
+        .ctrl-group { display: flex; gap: 10px; flex: 1; }
+        .ctrl-btn {
+            flex: 1;
+            height: 70px;
+            border-radius: 12px;
+            font-size: 24px;
+            background: #2c3e50;
+            border-bottom: 5px solid #000;
+        }
+        .action-go { background: var(--success); }
+        .action-stop { background: var(--danger); }
+
+        #countdown {
+            position: absolute;
+            font-size: 100px;
+            font-weight: 900;
+            color: var(--warning);
+            pointer-events: none;
+            z-index: 30;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="hud">
+            <div>Score: <span id="score" class="stat-val">0</span></div>
+            <div>Mistakes: <span id="mistakes" class="stat-err">0</span>/3</div>
+            <div>KM/H: <span id="speed" class="stat-val">0</span></div>
+        </div>
+
+        <div id="countdown" class="hidden">3</div>
+
+        <canvas id="gameCanvas"></canvas>
+
+        <div id="overlay" class="screen">
+            <h1>SAFE RACER</h1>
+            <p>🚦 Stop at Red Signals<br>🚸 Yield at Crossings<br>🏎 Watch the Speed Limit (60)</p>
+            <button id="start-btn">START ENGINE</button>
+        </div>
+
+        <div id="quiz-modal" class="screen hidden">
+            <h2 style="color:var(--warning)">ROAD SAFETY CHECK</h2>
+            <p id="quiz-question" style="margin-top:15px"></p>
+            <div id="quiz-options" style="width: 100%;"></div>
+        </div>
+
+        <div id="game-over" class="screen hidden">
+            <h2 id="end-status">GAME OVER</h2>
+            <p>Your Final Score: <span id="final-score">0</span></p>
+            <button onclick="location.reload()">PLAY AGAIN</button>
+        </div>
+
+        <div id="mobile-controls">
+            <div class="ctrl-group">
+                <button id="btn-left" class="ctrl-btn">◀</button>
+                <button id="btn-right" class="ctrl-btn">▶</button>
+            </div>
+            <div class="ctrl-group">
+                <button id="btn-go" class="ctrl-btn action-go">GO</button>
+                <button id="btn-stop" class="ctrl-btn action-stop">STOP</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /** @type {HTMLCanvasElement} */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Game State
+        let score = 0;
+        let mistakes = 0;
+        let speed = 0;
+        let isMoving = false;
+        let gameRunning = false;
+        let gameDistance = 0;
+        const GOAL = 5000;
+        
+        // Player
+        const player = { lane: 1, x: 0, y: 0, w: 45, h: 80, color: '#3498db' };
+        
+        // World Objects
+        let signal = { active: false, y: -100, status: 'GREEN', type: 'light' }; // types: light, pedestrian
+        let markers = [];
+
+        function init() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            player.y = canvas.height - 150;
+            updateCarPos();
+            
+            // Create static road markers
+            markers = [];
+            for(let i=0; i<10; i++) markers.push(i * (canvas.height / 5));
+        }
+
+        function updateCarPos() {
+            const laneWidth = canvas.width / 3;
+            player.targetX = (laneWidth * player.lane) + (laneWidth / 2) - (player.w / 2);
+        }
+
+        // Logic
+        function triggerMistake(msg) {
+            mistakes++;
+            score = Math.max(0, score - 10);
+            updateHUD();
+            if (mistakes >= 3) {
+                gameRunning = false;
+                showQuiz();
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score').innerText = score;
+            document.getElementById('mistakes').innerText = mistakes;
+            document.getElementById('speed').innerText = Math.floor(speed);
+        }
+
+        // --- Input Handling ---
+        const setGo = (val) => { isMoving = val; };
+        const moveL = () => { if(player.lane > 0) { player.lane--; updateCarPos(); } };
+        const moveR = () => { if(player.lane < 2) { player.lane++; updateCarPos(); } };
+
+        // Keyboard
+        window.addEventListener('keydown', e => {
+            if(e.key === 'ArrowLeft') moveL();
+            if(e.key === 'ArrowRight') moveR();
+            if(e.key === 'ArrowUp') setGo(true);
+        });
+        window.addEventListener('keyup', e => {
+            if(e.key === 'ArrowUp') setGo(false);
+        });
+
+        // Touch
+        const bindTouch = (id, fnStart, fnEnd) => {
+            const el = document.getElementById(id);
+            el.addEventListener('touchstart', e => { e.preventDefault(); fnStart(); });
+            if(fnEnd) el.addEventListener('touchend', e => { e.preventDefault(); fnEnd(); });
+            el.addEventListener('mousedown', fnStart);
+            if(fnEnd) el.addEventListener('mouseup', fnEnd);
+        };
+
+        bindTouch('btn-left', moveL);
+        bindTouch('btn-right', moveR);
+        bindTouch('btn-go', () => setGo(true), () => setGo(false));
+        bindTouch('btn-stop', () => setGo(false));
+
+        // --- Core Loop ---
+        function update() {
+            if(!gameRunning) return;
+
+            // Speed Logic
+            if(isMoving) {
+                speed = Math.min(speed + 1.5, 85);
+            } else {
+                speed = Math.max(speed - 2, 0);
+            }
+
+            // Road scroll
+            markers = markers.map(m => {
+                let newM = m + (speed * 0.2);
+                return newM > canvas.height ? 0 : newM;
+            });
+
+            // Signal Logic
+            if(!signal.active && Math.random() < 0.01) {
+                signal.active = true;
+                signal.y = -100;
+                signal.type = Math.random() > 0.5 ? 'light' : 'pedestrian';
+                signal.status = 'RED';
+            }
+
+            if(signal.active) {
+                signal.y += (speed * 0.2);
+                
+                // Rule Check: If passing red light while moving
+                if(signal.y > player.y - 20 && signal.y < player.y && speed > 5) {
+                    triggerMistake();
+                    signal.active = false;
+                } else if (signal.y > player.y + 100) {
+                    // Passed successfully
+                    score += 10;
+                    signal.active = false;
+                    updateHUD();
+                }
+            }
+
+            // Speed limit check
+            if(speed > 60 && Math.random() < 0.005) triggerMistake();
+
+            // Lerp car position
+            player.x += (player.targetX - player.x) * 0.15;
+
+            gameDistance += (speed * 0.01);
+            if(gameDistance >= GOAL) endGame(true);
+            
+            updateHUD();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const laneW = canvas.width / 3;
+
+            // Lines
+            ctx.setLineDash([20, 30]);
+            ctx.strokeStyle = "rgba(255,255,255,0.3)";
+            ctx.lineWidth = 4;
+            for(let i=1; i<3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(laneW * i, 0); ctx.lineTo(laneW * i, canvas.height);
+                ctx.stroke();
+            }
+
+            // Signal/Zebra
+            if(signal.active) {
+                if(signal.type === 'light') {
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(10, signal.y, 40, 80);
+                    ctx.fillStyle = signal.status === 'RED' ? 'red' : 'green';
+                    ctx.beginPath(); ctx.arc(30, signal.y + 25, 12, 0, Math.PI*2); ctx.fill();
+                } else {
+                    ctx.fillStyle = "rgba(255,255,255,0.8)";
+                    for(let i=0; i<6; i++) ctx.fillRect(i*laneW*0.6, signal.y, 30, 100);
+                }
+            }
+
+            // Player Car
+            ctx.fillStyle = player.color;
+            ctx.shadowBlur = 15; ctx.shadowColor = player.color;
+            roundRect(ctx, player.x, player.y, player.w, player.h, 8);
+            ctx.shadowBlur = 0;
+            
+            // Windows
+            ctx.fillStyle = "rgba(0,0,0,0.3)";
+            ctx.fillRect(player.x + 5, player.y + 15, player.w - 10, 20);
+        }
+
+        function roundRect(ctx, x, y, w, h, r) {
+            ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r);
+            ctx.arcTo(x+w, y+h, x, y+h, r); ctx.arcTo(x, y+h, x, y, r);
+            ctx.arcTo(x, y, x+w, y, r); ctx.closePath(); ctx.fill();
+        }
+
+        const quizBank = [
+            { q: "What does a flashing yellow light mean?", a: ["Stop immediately", "Slow down and proceed with caution", "Speed up"], c: 1 },
+            { q: "Solid white line between lanes means?", a: ["Stay in your lane", "Change lanes anytime", "Overtake from left"], c: 0 },
+            { q: "Legal blood alcohol limit for driving?", a: ["0.08%", "0.05%", "Zero is safest"], c: 2 }
+        ];
+
+        function showQuiz() {
+            const modal = document.getElementById('quiz-modal');
+            const qBox = document.getElementById('quiz-question');
+            const oBox = document.getElementById('quiz-options');
+            const q = quizBank[Math.floor(Math.random() * quizBank.length)];
+            
+            qBox.innerText = q.q;
+            oBox.innerHTML = '';
+            q.a.forEach((opt, i) => {
+                const btn = document.createElement('button');
+                btn.className = 'quiz-opt';
+                btn.innerText = opt;
+                btn.onclick = () => {
+                    if(i === q.c) {
+                        mistakes = 0;
+                        modal.classList.add('hidden');
+                        startCountdown();
+                    } else {
+                        endGame(false);
+                    }
+                };
+                oBox.appendChild(btn);
+            });
+            modal.classList.remove('hidden');
+        }
+
+        function startCountdown() {
+            const countEl = document.getElementById('countdown');
+            countEl.classList.remove('hidden');
+            let count = 3;
+            countEl.innerText = count;
+            
+            const timer = setInterval(() => {
+                count--;
+                if(count <= 0) {
+                    clearInterval(timer);
+                    countEl.classList.add('hidden');
+                    gameRunning = true;
+                    requestAnimationFrame(loop);
+                }
+                countEl.innerText = count;
+            }, 1000);
+        }
+
+        function endGame(win) {
+            gameRunning = false;
+            document.getElementById('game-over').classList.remove('hidden');
+            document.getElementById('quiz-modal').classList.add('hidden');
+            document.getElementById('end-status').innerText = win ? "🏆 MISSION COMPLETE" : "💥 LICENSE REVOKED";
+            document.getElementById('final-score').innerText = score;
+        }
+
+        function loop() {
+            if(!gameRunning) return;
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        document.getElementById('start-btn').onclick = () => {
+            document.getElementById('overlay').classList.add('hidden');
+            init();
+            startCountdown();
+        };
+
+        window.onresize = init;
+    </script>
+</body>
+</html>
