@@ -1,4 +1,7 @@
-<!DOCTYPE html>
+
+
+   
+                    <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -12,6 +15,8 @@
             --warning: #f1c40f;
             --dark: #1a1a1a;
             --road: #2c3e50;
+            --sand: #f4d03f;
+            --sand-dark: #b7950b;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
@@ -36,6 +41,8 @@
             display: flex;
             flex-direction: column;
             box-shadow: 0 0 50px rgba(0,0,0,0.5);
+            border-left: 20px solid var(--sand);
+            border-right: 20px solid var(--sand);
         }
 
         /* Top HUD */
@@ -52,10 +59,20 @@
         .stat-val { color: var(--primary); }
         .stat-err { color: var(--danger); }
 
-        canvas {
+        #game-canvas-container {
             flex-grow: 1;
             width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
             background: var(--road);
+            position: absolute;
+            top: 0;
+            left: 0;
         }
 
         /* Overlays */
@@ -130,6 +147,20 @@
             pointer-events: none;
             z-index: 30;
         }
+        
+        /* Sand features */
+        .rock, .cactus {
+            position: absolute;
+            z-index: 1;
+        }
+        .rock {
+            background-color: var(--sand-dark);
+            border-radius: 5px;
+        }
+        .cactus {
+            background-color: var(--success);
+            border-radius: 50%;
+        }
     </style>
 </head>
 <body>
@@ -142,8 +173,10 @@
         </div>
 
         <div id="countdown" class="hidden">3</div>
-
-        <canvas id="gameCanvas"></canvas>
+        
+        <div id="game-canvas-container">
+            <canvas id="gameCanvas"></canvas>
+        </div>
 
         <div id="overlay" class="screen">
             <h1>SAFE RACER</h1>
@@ -179,6 +212,7 @@
         /** @type {HTMLCanvasElement} */
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
+        const container = document.getElementById('game-canvas-container');
         
         // Game State
         let score = 0;
@@ -193,18 +227,43 @@
         const player = { lane: 1, x: 0, y: 0, w: 45, h: 80, color: '#3498db' };
         
         // World Objects
-        let signal = { active: false, y: -100, status: 'GREEN', type: 'light' }; // types: light, pedestrian
+        let signal = { active: false, y: -100, status: 'GREEN', type: 'light', lastBlinkTime: 0, blinkOn: true, pedestrians: [] }; // types: light, pedestrian
         let markers = [];
+        let otherCars = [];
+        let sandFeatures = [];
 
         function init() {
-            canvas.width = canvas.offsetWidth;
-            canvas.height = canvas.offsetHeight;
+            canvas.width = container.offsetWidth;
+            canvas.height = container.offsetHeight;
             player.y = canvas.height - 150;
             updateCarPos();
             
             // Create static road markers
             markers = [];
             for(let i=0; i<10; i++) markers.push(i * (canvas.height / 5));
+            
+            // Create initial features in sand on the sides
+            createSandFeatures();
+            
+            // Clear cars and signal
+            otherCars = [];
+            signal.active = false;
+        }
+
+        function createSandFeatures() {
+            for (let i=0; i<10; i++) {
+                const side = Math.random() < 0.5 ? 'left' : 'right';
+                const xBase = side === 'left' ? -20 : canvas.width;
+                const feature = {
+                    type: Math.random() < 0.7 ? 'rock' : 'cactus',
+                    side: side,
+                    x: xBase + (Math.random() * 20) - 10,
+                    y: Math.random() * canvas.height,
+                    w: featureType === 'rock' ? 20 + Math.random() * 20 : 15,
+                    h: featureType === 'rock' ? 15 + Math.random() * 15 : 25 + Math.random() * 15,
+                }
+                sandFeatures.push(feature);
+            }
         }
 
         function updateCarPos() {
@@ -231,26 +290,28 @@
 
         // --- Input Handling ---
         const setGo = (val) => { isMoving = val; };
-        const moveL = () => { if(player.lane > 0) { player.lane--; updateCarPos(); } };
-        const moveR = () => { if(player.lane < 2) { player.lane++; updateCarPos(); } };
+        const moveL = () => { if(gameRunning && player.lane > 0) { player.lane--; updateCarPos(); } };
+        const moveR = () => { if(gameRunning && player.lane < 2) { player.lane++; updateCarPos(); } };
 
         // Keyboard
         window.addEventListener('keydown', e => {
-            if(e.key === 'ArrowLeft') moveL();
-            if(e.key === 'ArrowRight') moveR();
-            if(e.key === 'ArrowUp') setGo(true);
+            if(gameRunning) {
+                if(e.key === 'ArrowLeft') moveL();
+                if(e.key === 'ArrowRight') moveR();
+                if(e.key === 'ArrowUp') setGo(true);
+            }
         });
         window.addEventListener('keyup', e => {
-            if(e.key === 'ArrowUp') setGo(false);
+            if(gameRunning && e.key === 'ArrowUp') setGo(false);
         });
 
         // Touch
         const bindTouch = (id, fnStart, fnEnd) => {
             const el = document.getElementById(id);
-            el.addEventListener('touchstart', e => { e.preventDefault(); fnStart(); });
-            if(fnEnd) el.addEventListener('touchend', e => { e.preventDefault(); fnEnd(); });
-            el.addEventListener('mousedown', fnStart);
-            if(fnEnd) el.addEventListener('mouseup', fnEnd);
+            el.addEventListener('touchstart', e => { e.preventDefault(); if(gameRunning) fnStart(); });
+            if(fnEnd) el.addEventListener('touchend', e => { e.preventDefault(); if(gameRunning) fnEnd(); });
+            el.addEventListener('mousedown', () => { if(gameRunning) fnStart(); });
+            if(fnEnd) el.addEventListener('mouseup', () => { if(gameRunning) fnEnd(); });
         };
 
         bindTouch('btn-left', moveL);
@@ -259,7 +320,7 @@
         bindTouch('btn-stop', () => setGo(false));
 
         // --- Core Loop ---
-        function update() {
+        function update(timestamp) {
             if(!gameRunning) return;
 
             // Speed Logic
@@ -275,22 +336,77 @@
                 return newM > canvas.height ? 0 : newM;
             });
 
+            // Features scroll
+            sandFeatures.forEach(f => {
+                f.y += (speed * 0.2);
+                if (f.y > canvas.height) {
+                    f.y = -f.h;
+                    f.x = (f.side === 'left' ? -20 : canvas.width) + (Math.random() * 20) - 10;
+                }
+            });
+
+            // Cars scroll and creation
+            otherCars.forEach(car => car.y += (speed * 0.2 - car.speed * 0.2));
+            otherCars = otherCars.filter(car => car.y < canvas.height + 100);
+            if (otherCars.length < 5 && Math.random() < 0.02) {
+                const colors = ['#e74c3c', '#2ecc71', '#f1c40f', '#9b59b6', '#34495e'];
+                const lane = Math.floor(Math.random() * 3);
+                const laneWidth = canvas.width / 3;
+                const carW = 45, carH = 80;
+                otherCars.push({
+                    lane: lane,
+                    x: (laneWidth * lane) + (laneWidth / 2) - (carW / 2),
+                    y: -100 - (Math.random() * 100),
+                    w: carW, h: carH,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    speed: 30 + Math.random() * 40
+                });
+            }
+
             // Signal Logic
-            if(!signal.active && Math.random() < 0.01) {
+            if(!signal.active && Math.random() < 0.005) {
                 signal.active = true;
-                signal.y = -100;
+                signal.y = -150;
                 signal.type = Math.random() > 0.5 ? 'light' : 'pedestrian';
                 signal.status = 'RED';
+                signal.pedestrians = [];
+                if (signal.type === 'pedestrian') {
+                    for (let i=0; i<3; i++) {
+                        signal.pedestrians.push({
+                            x: -30 - i * 40,
+                            y: signal.y + 120 + i * 10,
+                            w: 20, h: 30, color: '#eee',
+                            isWalking: true, legAngle: 0
+                        });
+                    }
+                }
             }
 
             if(signal.active) {
                 signal.y += (speed * 0.2);
                 
+                // Traffic light blinking
+                if (signal.type === 'light') {
+                    const now = timestamp;
+                    if (now - signal.lastBlinkTime > 500) { // Blink every 500ms
+                        signal.blinkOn = !signal.blinkOn;
+                        signal.lastBlinkTime = now;
+                    }
+                } else if (signal.type === 'pedestrian') {
+                    // Update pedestrians walking animation
+                    signal.pedestrians.forEach(p => {
+                        p.y = signal.y + 120 + (p.x % 40) / 4; // Follow crossing
+                        p.x += 1;
+                        p.legAngle += 0.1;
+                        if (p.x > canvas.width + 30) p.isWalking = false;
+                    });
+                }
+                
                 // Rule Check: If passing red light while moving
-                if(signal.y > player.y - 20 && signal.y < player.y && speed > 5) {
+                if(signal.active && signal.y > player.y - 20 && signal.y < player.y && speed > 5) {
                     triggerMistake();
                     signal.active = false;
-                } else if (signal.y > player.y + 100) {
+                } else if (signal.active && signal.y > player.y + 100) {
                     // Passed successfully
                     score += 10;
                     signal.active = false;
@@ -304,15 +420,34 @@
             // Lerp car position
             player.x += (player.targetX - player.x) * 0.15;
 
+            // Collision with other cars
+            for (let i=0; i<otherCars.length; i++) {
+                const car = otherCars[i];
+                if (
+                    player.x < car.x + car.w &&
+                    player.x + player.w > car.x &&
+                    player.y < car.y + car.h &&
+                    player.y + player.h > car.y
+                ) {
+                    triggerMistake();
+                    otherCars.splice(i, 1);
+                    break;
+                }
+            }
+
             gameDistance += (speed * 0.01);
             if(gameDistance >= GOAL) endGame(true);
             
             updateHUD();
         }
 
-        function draw() {
+        function draw(timestamp) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const laneW = canvas.width / 3;
+
+            // Draw Road
+            ctx.fillStyle = varColor('--road');
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             // Lines
             ctx.setLineDash([20, 30]);
@@ -324,16 +459,34 @@
                 ctx.stroke();
             }
 
+            // Draw Features on sides
+            drawSandFeatures();
+
+            // Draw Other Cars
+            otherCars.forEach(car => {
+                ctx.fillStyle = car.color;
+                roundRect(ctx, car.x, car.y, car.w, car.h, 8);
+                ctx.fillStyle = "rgba(0,0,0,0.3)";
+                ctx.fillRect(car.x + 5, car.y + 15, car.w - 10, 20);
+            });
+
             // Signal/Zebra
             if(signal.active) {
                 if(signal.type === 'light') {
+                    // Draw traffic light
                     ctx.fillStyle = '#000';
-                    ctx.fillRect(10, signal.y, 40, 80);
-                    ctx.fillStyle = signal.status === 'RED' ? 'red' : 'green';
-                    ctx.beginPath(); ctx.arc(30, signal.y + 25, 12, 0, Math.PI*2); ctx.fill();
-                } else {
+                    ctx.fillRect(laneW/2 - 25, signal.y, 50, 100);
+                    // Blinking
+                    ctx.fillStyle = (signal.status === 'RED' && signal.blinkOn) ? 'red' : 'rgba(255,0,0,0.2)';
+                    ctx.beginPath(); ctx.arc(laneW/2, signal.y + 30, 15, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = (signal.status === 'GREEN' && signal.blinkOn) ? 'green' : 'rgba(0,255,0,0.2)';
+                    ctx.beginPath(); ctx.arc(laneW/2, signal.y + 70, 15, 0, Math.PI*2); ctx.fill();
+                } else if (signal.type === 'pedestrian') {
+                    // Draw zebra crossing
                     ctx.fillStyle = "rgba(255,255,255,0.8)";
-                    for(let i=0; i<6; i++) ctx.fillRect(i*laneW*0.6, signal.y, 30, 100);
+                    for(let i=0; i<6; i++) ctx.fillRect(i*laneW*0.6, signal.y + 100, 30, 100);
+                    // Draw pedestrians
+                    signal.pedestrians.forEach(p => drawPedestrian(p));
                 }
             }
 
@@ -348,16 +501,42 @@
             ctx.fillRect(player.x + 5, player.y + 15, player.w - 10, 20);
         }
 
+        function drawSandFeatures() {
+            sandFeatures.forEach(f => {
+                ctx.fillStyle = f.type === 'rock' ? varColor('--sand-dark') : varColor('--success');
+                if (f.type === 'rock') {
+                    roundRect(ctx, f.x, f.y, f.w, f.h, 5);
+                } else {
+                    // Simple cactus drawing
+                    ctx.beginPath(); ctx.arc(f.x + f.w/2, f.y + f.h/2, f.w/2, 0, Math.PI*2); ctx.fill();
+                    ctx.fillRect(f.x + f.w/2 - 3, f.y + f.h/2, 6, f.h/2);
+                }
+            });
+        }
+
+        function drawPedestrian(p) {
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            // Simple animation
+            const legH = 10;
+            ctx.fillRect(p.x + 2, p.y + p.h, 6, legH + Math.sin(p.legAngle) * 2);
+            ctx.fillRect(p.x + p.w - 8, p.y + p.h, 6, legH - Math.sin(p.legAngle) * 2);
+        }
+
         function roundRect(ctx, x, y, w, h, r) {
             ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r);
             ctx.arcTo(x+w, y+h, x, y+h, r); ctx.arcTo(x, y+h, x, y, r);
             ctx.arcTo(x, y, x+w, y, r); ctx.closePath(); ctx.fill();
         }
 
+        function varColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name); }
+
         const quizBank = [
             { q: "What does a flashing yellow light mean?", a: ["Stop immediately", "Slow down and proceed with caution", "Speed up"], c: 1 },
             { q: "Solid white line between lanes means?", a: ["Stay in your lane", "Change lanes anytime", "Overtake from left"], c: 0 },
-            { q: "Legal blood alcohol limit for driving?", a: ["0.08%", "0.05%", "Zero is safest"], c: 2 }
+            { q: "Legal blood alcohol limit for driving?", a: ["0.08%", "0.05%", "Zero is safest"], c: 2 },
+            { q: "What should you do at a zebra crossing with pedestrians?", a: ["Stop and yield", "Honk and continue", "Speed up to pass before them"], c: 0 },
+            { q: "Speed limit in the game is:", a: ["40 km/h", "60 km/h", "80 km/h"], c: 1 }
         ];
 
         function showQuiz() {
@@ -412,10 +591,10 @@
             document.getElementById('final-score').innerText = score;
         }
 
-        function loop() {
+        function loop(timestamp) {
             if(!gameRunning) return;
-            update();
-            draw();
+            update(timestamp);
+            draw(timestamp);
             requestAnimationFrame(loop);
         }
 
